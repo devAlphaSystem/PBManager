@@ -937,19 +937,27 @@ async function _internalListInstances() {
     return [];
   }
 
-  const pm2Statuses = {};
+  const { stdout } = await safeRunCommand("pm2", ["jlist", "--silent"], "Failed to query PM2 process list", false, { cwd: CONFIG_DIR, silent: true });
+  let pm2List;
   try {
-    const pm2ListRaw = shell.exec("pm2 jlist", { silent: true });
-    if (pm2ListRaw.code === 0 && pm2ListRaw.stdout) {
-      const pm2List = JSON.parse(pm2ListRaw.stdout);
-      const prefixLen = PM2_INSTANCE_PREFIX.length;
-      for (const proc of pm2List) {
-        if (proc.name.startsWith(PM2_INSTANCE_PREFIX)) {
-          pm2Statuses[proc.name.substring(prefixLen)] = proc.pm2_env.status;
-        }
-      }
+    pm2List = JSON.parse(stdout);
+  } catch {
+    throw new Error("Failed to read PM2 process list: PM2 returned invalid JSON.");
+  }
+  if (!Array.isArray(pm2List)) {
+    throw new Error("Failed to read PM2 process list: expected an array.");
+  }
+
+  const pm2Statuses = {};
+  const prefixLen = PM2_INSTANCE_PREFIX.length;
+  for (const proc of pm2List) {
+    if (typeof proc?.name !== "string" || typeof proc.pm2_env?.status !== "string" || !proc.pm2_env.status) {
+      throw new Error("Failed to read PM2 process list: invalid process name or status.");
     }
-  } catch {}
+    if (proc.name.startsWith(PM2_INSTANCE_PREFIX)) {
+      pm2Statuses[proc.name.substring(prefixLen)] = proc.pm2_env.status;
+    }
+  }
 
   const httpsInstances = [];
   for (const name of instanceNames) {
@@ -982,7 +990,7 @@ async function _internalListInstances() {
       publicUrl: `${publicUrl}/_/`,
       internalPort: inst.port,
       dataDirectory: inst.dataDir,
-      pm2Status: pm2Statuses[name] || "UNKNOWN",
+      pm2Status: pm2Statuses[name] ?? "NOT FOUND",
       adminURL: `http://127.0.0.1:${inst.port}/_/`,
       certExpiryDays: inst.useHttps ? (certExpiryMap[name] ?? "-") : "-",
     };
@@ -1200,6 +1208,10 @@ async function _internalResetInstance(payload) {
     }
     const instance = config.instances[name];
     const dataDir = instance.dataDir;
+
+    // Keep this process and its children outside the directory being deleted.
+    process.chdir(CONFIG_DIR);
+
     if (completeLogging) results.messages.push(`Stopping and deleting PM2 process for ${PM2_INSTANCE_PREFIX}${name}...`);
     try {
       await safeRunCommand("pm2", ["stop", `${PM2_INSTANCE_PREFIX}${name}`], `Stopping ${PM2_INSTANCE_PREFIX}${name}`, true);
@@ -1228,8 +1240,8 @@ async function _internalResetInstance(payload) {
     if (completeLogging && pm2UpdateRes.success) results.messages.push(pm2UpdateRes.message);
 
     const pm2ReloadRes = await reloadPm2();
-    if (completeLogging && pm2ReloadRes.success) results.messages.push(pm2ReloadRes.message);
-    else if (!pm2ReloadRes.success) results.messages.push(`PM2 reload after reset failed: ${pm2ReloadRes.message}`);
+    if (!pm2ReloadRes.success) throw new Error(`PM2 reload after reset failed: ${pm2ReloadRes.message}`);
+    if (completeLogging) results.messages.push(pm2ReloadRes.message);
 
     if (completeLogging) results.messages.push(`Instance "${name}" services reloaded after reset.`);
 
@@ -1255,7 +1267,7 @@ async function _internalResetInstance(payload) {
       }
     }
     if (completeLogging) results.messages.push(`Starting instance ${PM2_INSTANCE_PREFIX}${name}...`);
-    await safeRunCommand("pm2", ["start", `${PM2_INSTANCE_PREFIX}${name}`], `Starting ${PM2_INSTANCE_PREFIX}${name}`, true);
+    await safeRunCommand("pm2", ["start", `${PM2_INSTANCE_PREFIX}${name}`], `Failed to start PM2 process ${PM2_INSTANCE_PREFIX}${name}`);
     results.success = true;
     results.messages.push(`Instance "${name}" reset and started.`);
   } catch (error) {
@@ -2178,6 +2190,7 @@ program
 
     if (!result.success) {
       console.error(chalk.red(`Failed to reset instance: ${result.error || "Unknown error."}`));
+      process.exitCode = 1;
     } else {
       console.log(chalk.bold.green(`Instance "${name}" reset process completed.`));
     }
