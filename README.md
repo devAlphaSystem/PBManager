@@ -4,7 +4,7 @@
 
 It supports **Debian-based** (Ubuntu, Debian), **RHEL-based** (Fedora, CentOS, Oracle Linux), and **Arch-based** Linux distributions.
 
-**Version: 0.9.2**
+**Version: 0.10.1**
 
 ## Key Features
 

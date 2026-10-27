@@ -1209,7 +1209,6 @@ async function _internalResetInstance(payload) {
     const instance = config.instances[name];
     const dataDir = instance.dataDir;
 
-    // Keep this process and its children outside the directory being deleted.
     process.chdir(CONFIG_DIR);
 
     if (completeLogging) results.messages.push(`Stopping and deleting PM2 process for ${PM2_INSTANCE_PREFIX}${name}...`);
